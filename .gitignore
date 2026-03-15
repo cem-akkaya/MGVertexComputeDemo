@@ -1,0 +1,14 @@
+﻿# Unreal Engine Plugin .gitignore
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+.vs/
+.idea/
+*.user
+*.suo
+*.sln
+*.sdf
+*.opensdf
+*.VC.db
+*.opendb
