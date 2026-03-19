@@ -18,19 +18,26 @@ VSOutput MainVS(uint VertexId : SV_VertexID)
 {
     VSOutput Out;
     
-    // Vertices for a 10m x 10m wall (1000 units) in local space of the actor
-    // Facing X-axis (YZ plane)
+    // Hardcoded quad geometry matching the Compute Shader output
     float4 Positions[4];
     Positions[0] = float4(0, -500, -500, 1);
     Positions[1] = float4(0,  500, -500, 1);
     Positions[2] = float4(0, -500,  500, 1);
     Positions[3] = float4(0,  500,  500, 1);
-    
+
+    float2 UVs[4];
+    UVs[0] = float2(0, 1);
+    UVs[1] = float2(1, 1);
+    UVs[2] = float2(0, 0);
+    UVs[3] = float2(1, 0);
+
     uint Indices[6] = {0, 1, 2, 2, 1, 3};
-    float4 LocalPosition = Positions[Indices[VertexId % 6]];
+    uint Idx = Indices[VertexId];
+    
+    float4 LocalPosition = Positions[Idx];
     
     Out.Position = mul(LocalPosition, WorldToClip);
-    Out.UV = float2(0, 0);
+    Out.UV = UVs[Idx];
     return Out;
 }
 
@@ -44,8 +51,6 @@ void MainPS(
     PSInput Input,
     out float4 OutColor : SV_Target0)
 {
-    // Temporarily output a bright cyan to ensure visibility if the geometry is drawn
-    OutColor = float4(0, 1, 1, 1);
-    // Original sampling for later
-    // OutColor = InTexture.Sample(InSampler, Input.UV);
+    float4 SampledColor = InTexture.Sample(InSampler, Input.UV);
+    OutColor = float4(SampledColor.rgb, 1.0f);
 }
