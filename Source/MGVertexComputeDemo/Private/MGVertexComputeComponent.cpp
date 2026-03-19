@@ -40,13 +40,11 @@ public:
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, InVertices)
         SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, InUVs)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InTexture)
+        SHADER_PARAMETER_SAMPLER(SamplerState, InSampler)
         SHADER_PARAMETER(FMatrix44f, WorldToClip)
+        RENDER_TARGET_BINDING_SLOTS()
     END_SHADER_PARAMETER_STRUCT()
-
-    static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-    {
-        return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
-    }
 };
 
 IMPLEMENT_GLOBAL_SHADER(FMGVertexComputeVS, "/MGVertexComputeDemo/MGVertexComputeGraphicsShader.usf", "MainVS", SF_Vertex);
@@ -57,13 +55,7 @@ public:
     DECLARE_GLOBAL_SHADER(FMGVertexComputePS);
     SHADER_USE_PARAMETER_STRUCT(FMGVertexComputePS, FGlobalShader);
 
-    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, InVertices)
-        SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float2>, InUVs)
-        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InTexture)
-        SHADER_PARAMETER_SAMPLER(SamplerState, InSampler)
-        RENDER_TARGET_BINDING_SLOTS()
-    END_SHADER_PARAMETER_STRUCT()
+    using FParameters = FMGVertexComputeVS::FParameters;
 
     static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
     {
@@ -167,46 +159,22 @@ void UMGVertexComputeComponent::Render_RenderThread(FRDGBuilder& GraphBuilder, c
     // Dispatch the compute shader; thread count should be kept in sync with [numthreads(6,1,1)] in the shader file.
     FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("MGVertexComputePass"), ComputeShader, PassParameters, FIntVector(1, 1, 1));
     
-    // Set up the draw pass parameters by creating Shader Resource Views for the computed buffers.
-    FMGVertexComputeVS::FParameters* VSParameters = GraphBuilder.AllocParameters<FMGVertexComputeVS::FParameters>();
-    VSParameters->InVertices = GraphBuilder.CreateSRV(VertexBuffer);
-    VSParameters->InUVs = GraphBuilder.CreateSRV(UVBuffer);
+    // Set up the unified draw pass parameters.
+    FMGVertexComputeVS::FParameters* DrawParameters = GraphBuilder.AllocParameters<FMGVertexComputeVS::FParameters>();
+    DrawParameters->InVertices = GraphBuilder.CreateSRV(VertexBuffer);
+    DrawParameters->InUVs = GraphBuilder.CreateSRV(UVBuffer);
     
     // Account for TranslatedWorldToClip to maintain high precision in large UE5 scenes.
     FMatrix44f TranslatedWorldToClip = FMatrix44f(View.ViewMatrices.GetTranslatedViewProjectionMatrix());
     FVector3f PreViewTranslation = FVector3f(View.ViewMatrices.GetPreViewTranslation());
     
     // Convert from Model space to TranslatedWorldSpace (Absolute World + PreViewTranslation).
-    // The LocalToWorld matrix already contains the absolute world position of the actor.
     FMatrix44f TranslatedLocalToWorld = LocalToWorld;
     FVector3f WorldOrigin = FVector3f(LocalToWorld.GetOrigin());
     TranslatedLocalToWorld.SetOrigin(WorldOrigin + PreViewTranslation);
 
     // Matrix multiplication order for row-major FMatrix corresponds to the VS mul(LocalPosition, WorldToClip).
-    VSParameters->WorldToClip = TranslatedLocalToWorld * TranslatedWorldToClip;
-    
-    // Debug check to verify NDC coordinates for the corners
-    FVector4f Corners[4] = {
-        FVector4f(0, -500, -500, 1),
-        FVector4f(0,  500, -500, 1),
-        FVector4f(0, -500,  500, 1),
-        FVector4f(0,  500,  500, 1)
-    };
-
-    for (int i = 0; i < 4; ++i)
-    {
-        FVector4f ClipPos = VSParameters->WorldToClip.TransformFVector4(Corners[i]);
-        FVector3f NDC = FVector3f(ClipPos.X / ClipPos.W, ClipPos.Y / ClipPos.W, ClipPos.Z / ClipPos.W);
-        UE_LOG(LogMGVertexCompute, Log, TEXT("Corner %d NDC: %s (W: %f)"), i, *NDC.ToString(), ClipPos.W);
-    }
-    
-    UE_LOG(LogMGVertexCompute, Log, TEXT("TranslatedLocalToWorld Matrix: %s"), *TranslatedLocalToWorld.ToString());
-    UE_LOG(LogMGVertexCompute, Log, TEXT("TranslatedWorldToClip Matrix: %s"), *TranslatedWorldToClip.ToString());
-    UE_LOG(LogMGVertexCompute, Log, TEXT("PreViewTranslation: %s"), *PreViewTranslation.ToString());
-
-    FMGVertexComputePS::FParameters* PSParameters = GraphBuilder.AllocParameters<FMGVertexComputePS::FParameters>();
-    PSParameters->InVertices = GraphBuilder.CreateSRV(VertexBuffer);
-    PSParameters->InUVs = GraphBuilder.CreateSRV(UVBuffer);
+    DrawParameters->WorldToClip = TranslatedLocalToWorld * TranslatedWorldToClip;
     
     FRHITexture* RTTextureRHI = View.Family->RenderTarget->GetRenderTargetTexture();
     if (!RTTextureRHI)
@@ -215,35 +183,32 @@ void UMGVertexComputeComponent::Render_RenderThread(FRDGBuilder& GraphBuilder, c
     }
 
     FRDGTextureRef RenderTargetTexture = RegisterExternalTexture(GraphBuilder, RTTextureRHI, TEXT("MGVertexDrawRT"));
-    PSParameters->RenderTargets[0] = FRenderTargetBinding(RenderTargetTexture, ERenderTargetLoadAction::ELoad);
+    DrawParameters->RenderTargets[0] = FRenderTargetBinding(RenderTargetTexture, ERenderTargetLoadAction::ELoad);
 
     if (TargetTexture != nullptr && TargetTexture->GetResource() != nullptr)
     {
         FRHITexture* TextureRHI = TargetTexture->GetResource()->GetTextureRHI();
         if (TextureRHI != nullptr)
-            PSParameters->InTexture = RegisterExternalTexture(GraphBuilder, TextureRHI, TEXT("MGVertexInputTexture"));
+            DrawParameters->InTexture = RegisterExternalTexture(GraphBuilder, TextureRHI, TEXT("MGVertexInputTexture"));
         else
-            PSParameters->InTexture = RegisterExternalTexture(GraphBuilder, GWhiteTexture->GetTextureRHI(), TEXT("MGWhiteTexture"));
+            DrawParameters->InTexture = RegisterExternalTexture(GraphBuilder, GWhiteTexture->GetTextureRHI(), TEXT("MGWhiteTexture"));
     }
     else
     {
-        PSParameters->InTexture = RegisterExternalTexture(GraphBuilder, GWhiteTexture->GetTextureRHI(), TEXT("MGWhiteTexture"));
+        DrawParameters->InTexture = RegisterExternalTexture(GraphBuilder, GWhiteTexture->GetTextureRHI(), TEXT("MGWhiteTexture"));
     }
     
-    PSParameters->InSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+    DrawParameters->InSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 
     TShaderMapRef<FMGVertexComputeVS> VertexShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
     TShaderMapRef<FMGVertexComputePS> PixelShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
 
     GraphBuilder.AddPass(
         RDG_EVENT_NAME("MGVertexDrawPass"),
-        PSParameters,
+        DrawParameters,
         ERDGPassFlags::Raster,
-        [VSParameters, PSParameters, VertexShader, PixelShader, ViewRect = View.UnscaledViewRect, RenderTargetTexture](FRHICommandList& RHICmdList)
+        [DrawParameters, VertexShader, PixelShader, ViewRect = View.UnscaledViewRect, RenderTargetTexture](FRHICommandList& RHICmdList)
         {
-            UE_LOG(LogMGVertexCompute, Log, TEXT("MGVertexDrawPass executing on RenderThread. ViewRect: (%d, %d) to (%d, %d). RT: %s"), 
-                ViewRect.Min.X, ViewRect.Min.Y, ViewRect.Max.X, ViewRect.Max.Y, RenderTargetTexture->Name);
-            
             RHICmdList.SetViewport(ViewRect.Min.X, ViewRect.Min.Y, 0.0f, ViewRect.Max.X, ViewRect.Max.Y, 1.0f);
 
             FGraphicsPipelineStateInitializer GraphicsPSOInit;
@@ -254,14 +219,8 @@ void UMGVertexComputeComponent::Render_RenderThread(FRDGBuilder& GraphBuilder, c
                 GraphicsPSOInit.RenderTargetFormats[0] = (uint8)RenderTargetTexture->GetRHI()->GetFormat();
                 GraphicsPSOInit.RenderTargetFlags[0] = RenderTargetTexture->GetRHI()->GetFlags();
                 GraphicsPSOInit.NumSamples = RenderTargetTexture->GetRHI()->GetNumSamples();
-                UE_LOG(LogMGVertexCompute, Log, TEXT("RT Format: %d, Samples: %d"), (int)GraphicsPSOInit.RenderTargetFormats[0], (int)GraphicsPSOInit.NumSamples);
-            }
-            else
-            {
-                UE_LOG(LogMGVertexCompute, Error, TEXT("RT RHI is null!"));
             }
 
-            // Blend state is configured for Opaque-ish Additive behavior to ensure visibility.
             GraphicsPSOInit.BlendState = TStaticBlendState<CW_RGBA, BO_Add, BF_One, BF_Zero>::GetRHI();
             GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
             GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
@@ -273,8 +232,8 @@ void UMGVertexComputeComponent::Render_RenderThread(FRDGBuilder& GraphBuilder, c
 
             SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
 
-            SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), *VSParameters);
-            SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), *PSParameters);
+            SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), *DrawParameters);
+            SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), *DrawParameters);
 
             RHICmdList.DrawPrimitive(0, 2, 1);
         });
