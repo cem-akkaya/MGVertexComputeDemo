@@ -99,8 +99,7 @@ public:
         UE_LOG(LogMGVertexCompute, Log, TEXT("PostRenderView_RenderThread called. State: %d"), Component.IsValid() ? (int)Component->State : -1);
         if (Component.IsValid() && Component->State == EMGVertexState::Executing)
         {
-            // Problem 6: Frustum culling / View filtering
-            // Only render in Game views or Editor views that have show flags for Game
+            // Ensure we're rendering in a context that supports debug or game flags, filtering out irrelevant viewports.
             if (InView.Family->EngineShowFlags.Game || InView.Family->EngineShowFlags.Editor)
             {
                 if (InView.Family->RenderTarget && InView.Family->RenderTarget->GetRenderTargetTexture())
@@ -149,14 +148,14 @@ void UMGVertexComputeComponent::Render_RenderThread(FRDGBuilder& GraphBuilder, c
 
     const int32 NumVertices = 6;
 
-    // 1. Create RDG Buffers
+    // Initialize the Render Graph buffers for vertex and UV data.
     FRDGBufferRef VertexBuffer = GraphBuilder.CreateBuffer(
         FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), NumVertices), TEXT("MGComputeVertexBuffer"));
     
     FRDGBufferRef UVBuffer = GraphBuilder.CreateBuffer(
         FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector2f), NumVertices), TEXT("MGComputeUVBuffer"));
 
-    // 2. Compute Pass
+    // Clear the buffers before the compute pass starts.
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(VertexBuffer), 0);
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(UVBuffer), 0);
 
@@ -165,29 +164,28 @@ void UMGVertexComputeComponent::Render_RenderThread(FRDGBuilder& GraphBuilder, c
     PassParameters->OutUVs = GraphBuilder.CreateUAV(UVBuffer);
 
     TShaderMapRef<FMGVertexComputeCS> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-    // Problem 4: Thread count should match shader [numthreads(6,1,1)]
+    // Dispatch the compute shader; thread count should be kept in sync with [numthreads(6,1,1)] in the shader file.
     FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("MGVertexComputePass"), ComputeShader, PassParameters, FIntVector(1, 1, 1));
     
-    // 3. Draw Pass Setup
+    // Set up the draw pass parameters by creating Shader Resource Views for the computed buffers.
     FMGVertexComputeVS::FParameters* VSParameters = GraphBuilder.AllocParameters<FMGVertexComputeVS::FParameters>();
     VSParameters->InVertices = GraphBuilder.CreateSRV(VertexBuffer);
     VSParameters->InUVs = GraphBuilder.CreateSRV(UVBuffer);
     
-    // Use TranslatedWorldToClip for better precision in UE5
+    // Account for TranslatedWorldToClip to maintain high precision in large UE5 scenes.
     FMatrix44f TranslatedWorldToClip = FMatrix44f(View.ViewMatrices.GetTranslatedViewProjectionMatrix());
     FVector3f PreViewTranslation = FVector3f(View.ViewMatrices.GetPreViewTranslation());
     
-    // Model space -> TranslatedWorldSpace (Absolute World + PreViewTranslation)
-    // LocalToWorld already contains the actor's absolute world position.
+    // Convert from Model space to TranslatedWorldSpace (Absolute World + PreViewTranslation).
+    // The LocalToWorld matrix already contains the absolute world position of the actor.
     FMatrix44f TranslatedLocalToWorld = LocalToWorld;
     FVector3f WorldOrigin = FVector3f(LocalToWorld.GetOrigin());
     TranslatedLocalToWorld.SetOrigin(WorldOrigin + PreViewTranslation);
 
-    // Matrix multiplication order for FMatrix (row-major) and VS (mul(LocalPosition, WorldToClip)):
-    // LocalPosition * (TranslatedLocalToWorld * TranslatedWorldToClip)
+    // Matrix multiplication order for row-major FMatrix corresponds to the VS mul(LocalPosition, WorldToClip).
     VSParameters->WorldToClip = TranslatedLocalToWorld * TranslatedWorldToClip;
     
-    // CPU-side check for NDC coordinates of 4 corners (10m x 10m wall in YZ plane)
+    // Debug check to verify NDC coordinates for the corners
     FVector4f Corners[4] = {
         FVector4f(0, -500, -500, 1),
         FVector4f(0,  500, -500, 1),
@@ -263,7 +261,8 @@ void UMGVertexComputeComponent::Render_RenderThread(FRDGBuilder& GraphBuilder, c
                 UE_LOG(LogMGVertexCompute, Error, TEXT("RT RHI is null!"));
             }
 
-            GraphicsPSOInit.BlendState = TStaticBlendState<CW_RGBA, BO_Add, BF_One, BF_Zero>::GetRHI(); // Opaque-ish Additive for visibility
+            // Blend state is configured for Opaque-ish Additive behavior to ensure visibility.
+            GraphicsPSOInit.BlendState = TStaticBlendState<CW_RGBA, BO_Add, BF_One, BF_Zero>::GetRHI();
             GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
             GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 

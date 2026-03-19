@@ -18,7 +18,7 @@ VSOutput MainVS(uint VertexId : SV_VertexID)
 {
     VSOutput Out;
     
-    // Hardcoded quad geometry matching the Compute Shader output
+    // Geometry for a hardcoded quad that aligns with the output from the Compute Shader.
     float4 Positions[4];
     Positions[0] = float4(0, -500, -500, 1);
     Positions[1] = float4(0,  500, -500, 1);
