@@ -2,6 +2,8 @@
 
 This plugin serves as a base for interfacing with the Unreal Engine 5 render pipeline. It demonstrates how to use the Render Graph (RDG) to execute compute shaders and draw custom geometry directly into the scene.
 
+<img src="Resources/1.gif" alt="plugin-spatial-selection" width="100%"/>
+
 ### Overview
 The plugin is designed to show a complete workflow for custom rendering. It starts by calculating vertex data in a compute shader and then uses that same data in a standard vertex and pixel shader pass. This approach is useful for any effect that requires dynamic geometry or data manipulation on the GPU before drawing.
 
@@ -16,5 +18,8 @@ The plugin implements a simple but effective RDG pipeline. It creates structured
 ### Coordinate Precision
 To handle the large-scale coordinates in Unreal Engine 5, the plugin uses `TranslatedWorldToClip` matrices and `PreViewTranslation`. This ensures that even when the camera is far from the world origin, the custom geometry remains stable and free from precision-related jitter.
 
-### Usage
-This is intended as a starting point for more complex rendering tasks. It shows how to properly register shaders, manage buffer lifecycles within RDG, and handle transformations between model space and clip space.
+### Implementation
+
+To start using the plugin, it needs to be enabled in the project settings under the "Plugins" menu. Once active, the core functionality is accessed through the `MGVertexComputeComponent`.
+
+This component can be added to any actor in the world. You can either create a new actor and add the component or attach it to an existing static mesh actor. Because the plugin renders custom geometry using a texture provided by the user, you should assign a valid `TargetTexture` within the component's properties. This texture will be sampled during the pixel shader pass and applied to the generated quad.
